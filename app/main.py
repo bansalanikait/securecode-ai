@@ -1,11 +1,29 @@
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, HTTPException, status
+from fastapi import FastAPI, UploadFile, File, HTTPException, status, BackgroundTasks
+from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import re
 
 from bson.objectid import ObjectId
 from app.database import get_reports_collection, MONGO_URI
+from app.scanner import scan_code
+from app.llm_service import enrich_vulnerabilities
+from app.pdf_service import generate_pdf
 
 app = FastAPI()
+
+# CORS - allow configured origins in production, default to localhost for dev
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Serve static frontend
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Simple vulnerability rules
 rules = [
@@ -32,74 +50,75 @@ rules = [
 
 @app.get("/")
 async def home():
-    return {"message": "SecureCode AI is running"}
+    """Redirect root to the static frontend upload page."""
+    return RedirectResponse(url="/static/index.html", status_code=302)
 
 @app.post("/scan")
-async def scan_code(file: UploadFile = File(...)):
+async def scan_endpoint(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     content = await file.read()
     code = content.decode("utf-8")
 
-    vulnerabilities = []
-    score = 100
-
-    severity_penalty = {
-        "High": 30,
-        "Medium": 15,
-        "Low": 5
-    }
-
-    for rule in rules:
-        if re.search(rule["pattern"], code, re.IGNORECASE):
-            vulnerabilities.append({
-                "issue": rule["name"],
-                "severity": rule["severity"],
-                "recommended_fix": rule["fix"]
-            })
-            score -= severity_penalty[rule["severity"]]
-    if score < 0:
-        score = 0
-
-    # Assign grade
-    if score >= 90:
-        grade = "A"
-    elif score >= 75:
-        grade = "B"
-    elif score >= 60:
-        grade = "C"
-    elif score >= 40:
-        grade = "D"
-    else:
-        grade = "F"
+    # Use scanner module
+    result = await scan_code(code)
 
     report_data = {
-        "timestamp": datetime.utcnow(),
-        "score": score,
-        "grade": grade,
-        "vulnerabilities": vulnerabilities
+        "timestamp": result["timestamp"],
+        "score": result["score"],
+        "grade": result["grade"],
+        "vulnerabilities": result["vulnerabilities"],
     }
-    
-    # Try to persist report if DB is configured and reachable.
+
+    # Persist and enqueue LLM enrichment in background
     try:
         reports_collection = await get_reports_collection()
     except RuntimeError as e:
-        # configuration problem (MONGO_URI missing)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
     except Exception as e:
-        # connection problem - return a service unavailable error
         print(f"Database connection error: {e}")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
 
     try:
-        await reports_collection.insert_one(report_data)
+        insert_res = await reports_collection.insert_one(report_data)
+        report_id = str(insert_res.inserted_id)
     except Exception as e:
-        # Do not fail the whole request on DB insert error; log and return result
         print(f"Database insert error: {e}")
+        # still return scan results but no report id
+        report_id = None
 
-    return {
-        "security_score": score,
-        "grade": grade,
-        "vulnerabilities": vulnerabilities
-    }
+    # schedule LLM enrichment asynchronously (do not block response)
+    if report_id and background_tasks is not None:
+        background_tasks.add_task(_background_enrich, report_id, report_data["vulnerabilities"])
+    elif report_id:
+        # best-effort task
+        try:
+            import asyncio
+
+            asyncio.create_task(_background_enrich(report_id, report_data["vulnerabilities"]))
+        except Exception:
+            pass
+
+    response = {"security_score": result["score"], "grade": result["grade"], "vulnerabilities": result["vulnerabilities"]}
+    if report_id:
+        response["report_id"] = report_id
+    return response
+
+
+async def _background_enrich(report_id: str, vulnerabilities: list):
+    try:
+        enriched = await enrich_vulnerabilities(report_id, vulnerabilities)
+    except Exception as e:
+        print(f"LLM enrichment task failed: {e}")
+        enriched = None
+
+    if enriched is None:
+        return
+
+    # Save enrichment back to DB; be tolerant of errors
+    try:
+        reports_collection = await get_reports_collection()
+        await reports_collection.update_one({"_id": ObjectId(report_id)}, {"$set": {"llm": enriched}})
+    except Exception as e:
+        print(f"Failed to save LLM enrichment: {e}")
 
 @app.get("/history")
 async def get_history():
@@ -151,6 +170,49 @@ async def get_report(report_id: str):
 
     doc["_id"] = str(doc["_id"])
     return doc
+
+
+@app.get("/report/{report_id}/pdf")
+async def get_report_pdf(report_id: str):
+    """Generate and return a PDF for a report."""
+    try:
+        reports_collection = await get_reports_collection()
+    except RuntimeError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+    except Exception as e:
+        print(f"Database connection error: {e}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
+
+    # Validate ObjectId
+    try:
+        oid = ObjectId(report_id)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid report id")
+
+    try:
+        doc = await reports_collection.find_one({"_id": oid})
+    except Exception as e:
+        print(f"Database read error: {e}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to read from database")
+
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    # Convert MongoDB document for PDF generation
+    doc["_id"] = str(doc["_id"])
+
+    # Generate PDF
+    try:
+        pdf_bytes = await generate_pdf(doc)
+    except Exception as e:
+        print(f"PDF generation error: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to generate PDF")
+
+    return StreamingResponse(
+        iter([pdf_bytes]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=report_{report_id}.pdf"}
+    )
 
 
 @app.get("/test-db")

@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>History - SecureCode AI</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>body{font-family:Arial;background:#0f1724;color:#e6eef8;padding:20px} .card{background:#07162a;padding:12px;border-radius:8px;margin-bottom:8px}</style>
+</head>
+<body>
+  <h2>Scan History</h2>
+  <div id="list"></div>
+
+  <script>
+    async function load(){
+      const res = await fetch('/history');
+      const data = await res.json();
+      const list = document.getElementById('list');
+      if(!data || !data.length) list.innerHTML = '<div class="card">No reports found</div>';
+      for(const r of data){
+        const el = document.createElement('div'); el.className='card';
+        el.innerHTML = `<div><b>${r._id}</b> - ${r.timestamp} - Score: ${r.score} Grade: ${r.grade} <a href='/static/view.html?id=${r._id}'>View</a> <a href='/report/${r._id}/pdf'>PDF</a></div>`;
+        list.appendChild(el);
+      }
+    }
+    load();
+  </script>
+</body>
+</html>
