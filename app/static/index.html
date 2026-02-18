@@ -5,43 +5,115 @@
   <title>SecureCode AI</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-  <style>
-    body{font-family:Inter,Arial;background:#0f1724;color:#e6eef8;margin:0;padding:0}
-    .nav{background:#061426;padding:12px 20px;display:flex;gap:12px}
-    .nav a{color:#9fd0ff;text-decoration:none}
-    .container{padding:24px;max-width:1000px;margin:0 auto}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
-    .card{background:#07162a;padding:16px;border-radius:8px;margin-bottom:12px;border:1px solid #123}
-    button,input{padding:10px 12px;border-radius:6px;border:1px solid #123;background:#0d2238;color:#e6eef8}
-    button{cursor:pointer}
-    .stack{display:flex;flex-direction:column;gap:10px}
-    .vuln{background:#081f2f;padding:10px;border-radius:6px;margin-top:8px;border:1px solid #10324b}
-    .meta{opacity:0.9;font-size:14px;margin:2px 0}
-    .actions{margin-top:12px;display:flex;gap:12px;flex-wrap:wrap}
-    .actions a{color:#9fd0ff}
-    .err{color:#ff8a8a}
-  </style>
+  <link rel="stylesheet" href="style.css">
+
 </head>
 <body>
-  <div class="nav"><a href="/static/index.html">Scan</a><a href="/static/history.html">History</a></div>
-  <div class="container">
-    <div class="grid">
+  <header class="nav">
+    <a class="brand" href="/static/index.html" aria-label="SecureCode AI Home">
+      <span class="brand-mark">SC</span>
+      <span>SecureCode AI</span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="/static/index.html">Scan</a>
+      <a href="/static/history.html">History</a>
+      <a href="#coverage">Coverage</a>
+      <a href="#how-it-works">How It Works</a>
+    </nav>
+    <button id="theme-toggle" class="theme-toggle" type="button">Theme</button>
+  </header>
+
+  <main class="container">
+    <section class="card hero">
+      <p class="eyebrow">Application Security Platform</p>
+      <h1>Detect vulnerabilities before they hit production.</h1>
+      <p class="hero-copy">
+        Scan individual files or full GitHub repositories and get severity-aware findings,
+        actionable fixes, and downloadable reports for your security workflow.
+      </p>
+      <div class="hero-metrics">
+        <div class="metric">
+          <span class="metric-value">OWASP</span>
+          <span class="metric-label">Top 10 aligned checks</span>
+        </div>
+        <div class="metric">
+          <span class="metric-value">AI</span>
+          <span class="metric-label">Context-aware recommendations</span>
+        </div>
+        <div class="metric">
+          <span class="metric-value">PDF</span>
+          <span class="metric-label">Shareable compliance reports</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid" id="scanner">
       <div class="card stack">
         <h2>Scan File</h2>
+        <p class="section-copy">Upload a single source file for an immediate security review.</p>
         <input id="file" type="file" />
         <button id="upload">Scan File</button>
       </div>
       <div class="card stack">
         <h2>Scan GitHub Repository</h2>
+        <p class="section-copy">Analyze an entire codebase and get a full vulnerability breakdown.</p>
         <input id="repo-url" type="url" placeholder="https://github.com/owner/repo" />
         <button id="scan-repo">Scan Repo</button>
       </div>
-    </div>
+    </section>
+
+    <section class="info-grid" id="coverage">
+      <article class="card info-card">
+        <h3>Security Coverage</h3>
+        <ul class="check-list">
+          <li>Injection and unsafe input handling</li>
+          <li>Insecure deserialization patterns</li>
+          <li>Hardcoded secrets and credentials</li>
+          <li>Authentication and access-control risks</li>
+        </ul>
+      </article>
+      <article class="card info-card">
+        <h3>What You Get</h3>
+        <ul class="check-list">
+          <li>Issue severity and affected line details</li>
+          <li>Recommended secure coding fixes</li>
+          <li>Score and grade for quick triage</li>
+          <li>History tracking for every scan report</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="card" id="how-it-works">
+      <h3>How It Works</h3>
+      <div class="steps">
+        <div class="step"><span>1</span>Submit file or repository URL.</div>
+        <div class="step"><span>2</span>Engine scans code and identifies risks.</div>
+        <div class="step"><span>3</span>Review prioritized findings and fixes.</div>
+        <div class="step"><span>4</span>Export PDF and share with your team.</div>
+      </div>
+    </section>
+
+    <section class="card trust-panel">
+      <h3>Built For Secure Development Teams</h3>
+      <div class="badge-row">
+        <span class="badge">Risk Scoring</span>
+        <span class="badge">Audit Ready</span>
+        <span class="badge">Report History</span>
+        <span class="badge">Developer Friendly</span>
+      </div>
+    </section>
+
     <div id="result"></div>
-  </div>
+  </main>
+
+  <footer class="footer">
+    <p>SecureCode AI | Shift-left security for modern engineering teams.</p>
+  </footer>
 
   <script>
     const resultEl = document.getElementById("result");
+    const themeToggle = document.getElementById("theme-toggle");
+    const themeKey = "securecode-theme";
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -159,6 +231,26 @@
       if (event.key === "Enter") {
         scanRepo();
       }
+    });
+
+    function applyTheme(theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      themeToggle.textContent = theme === "light" ? "Dark Mode" : "Light Mode";
+    }
+
+    const savedTheme = localStorage.getItem(themeKey);
+    if (savedTheme === "dark" || savedTheme === "light") {
+      applyTheme(savedTheme);
+    } else {
+      const prefersLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+      applyTheme(prefersLight ? "light" : "dark");
+    }
+
+    themeToggle.addEventListener("click", () => {
+      const currentTheme = document.documentElement.getAttribute("data-theme");
+      const nextTheme = currentTheme === "light" ? "dark" : "light";
+      applyTheme(nextTheme);
+      localStorage.setItem(themeKey, nextTheme);
     });
   </script>
 </body>
